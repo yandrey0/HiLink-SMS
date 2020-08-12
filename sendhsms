@@ -1,0 +1,80 @@
+#!/bin/bash
+
+if [ -z $1 ]; then
+    echo "tel?"
+    exit
+fi
+
+if [ -z "$2" ]; then
+    echo "text?"
+    exit
+fi
+
+
+NUMBER=$1
+MESSAGE=$2
+
+IP="192.168.8.1"
+USER="admin"
+PASS="12345"
+
+LENGTH=${#MESSAGE}
+TIME=$(date +"%Y-%m-%d %T")
+
+sestok(){
+RESPONSE=`curl -s --connect-timeout 5 -X GET http://$IP/api/webserver/SesTokInfo -H "Cookie: $1"`
+
+SES=`echo "$RESPONSE" | sed -n 's:.*<SesInfo>\(.*\)</SesInfo>.*:\1:p'`
+TOK=`echo "$RESPONSE" | sed -n 's:.*<TokInfo>\(.*\)</TokInfo>.*:\1:p'`
+}
+
+sestok
+
+if [ -n "$SES" ] && [ -n "$TOK" ]; then
+
+PASS=$(echo -n "$PASS" | shasum -a 256 | awk '{printf "%s",$1}' | openssl base64 -A)
+PASS=$(echo -n $USER$PASS$TOK | shasum -a 256 | awk '{printf "%s",$1}' | openssl base64 -A)
+
+
+LOGIN=`curl -s -i http://$IP/api/user/login -H "Cookie: $SES" -H "Content-Type: application/x-www-form-urlencoded; charset=UTF-8" -H "X-Requested-With: XMLHttpRequest" -H "__RequestVerificationToken: $TOK" --data "<?xml version=\"1.0\" encoding=\"UTF-8\"?><request><Username>$USER</Username><Password>$PASS</Password><password_type>4</password_type></request>" --compressed`
+
+SRES=`echo "$LOGIN" | sed -n 's:.*<response>\(.*\)</response>.*:\1:p'`
+
+if [ "$SRES" = "OK" ]; then
+
+SES2=`echo "$LOGIN" | grep 'SessionID=' | cut -d ':' -f2 | cut -d ';' -f1`
+#TOK2=`echo "$R2" | grep '__RequestVerificationToken:' | cut -d ':' -f2`
+
+sestok $SES2
+
+
+XML="<?xml version=\"1.0\" encoding=\"UTF-8\"?><request><Index>-1</Index><Phones><Phone>$NUMBER</Phone></Phones><Sca></Sca><Content>$MESSAGE</Content><Length>$LENGTH</Length><Reserved>1</Reserved><Date>$TIME</Date></request>"
+
+
+RES=`curl -s http://$IP/api/sms/send-sms -H "Cookie: $SES2" -H "Content-Type: application/x-www-form-urlencoded; charset=UTF-8" -H "X-Requested-With: XMLHttpRequest" -H "__RequestVerificationToken: $TOK" --data "$XML" --compressed`
+
+SRES=`echo "$RES" | sed -n 's:.*<response>\(.*\)</response>.*:\1:p'`
+
+if [ "$SRES" = "OK" ]; then
+
+sestok $SES2
+
+sleep 1
+
+RES=`curl -s http://$IP/api/sms/sms-list -H "Cookie: $SES2" -H "Content-Type: application/x-www-form-urlencoded; charset=UTF-8" -H "X-Requested-With: XMLHttpRequest" -H "__RequestVerificationToken: $TOK" --data '<?xml version="1.0" encoding="UTF-8"?><request><PageIndex>1</PageIndex><ReadCount>1</ReadCount><BoxType>2</BoxType><SortType>2</SortType><Ascending>0</Ascending><UnreadPreferred>0</UnreadPreferred></request>' --compressed`
+
+INDEX=`echo "$RES" | sed -n 's:.*<Index>\(.*\)</Index>.*:\1:p'`
+
+if [ -n "$INDEX" ]; then
+
+sestok $SES2
+
+RES=`curl -s http://$IP/api/sms/delete-sms -H "Cookie: $SES2" -H "Content-Type: application/x-www-form-urlencoded; charset=UTF-8" -H "X-Requested-With: XMLHttpRequest" -H "__RequestVerificationToken: $TOK" --data "<?xml version=\"1.0\" encoding=\"UTF-8\"?><request><Index>$INDEX</Index></request>" --compressed`
+
+fi
+
+fi
+
+fi
+
+fi
